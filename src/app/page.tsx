@@ -6,15 +6,23 @@ import { useLanguage } from "../context/LanguageContext";
 import { useAuth } from "../context/AuthContext";
 import AuthModal from "../components/AuthModal";
 import { db, storage } from "../firebase";
-import { collection, addDoc, serverTimestamp, query, orderBy, onSnapshot } from "firebase/firestore";
+// 🚨 좋아요 업데이트를 위해 doc, updateDoc, arrayUnion, arrayRemove 도구를 추가로 가져옵니다!
+import { collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, doc, updateDoc, arrayUnion, arrayRemove } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
-interface Post { id: string; content: string; author: string; createdAt: any; imageUrl?: string; language: string; }
+// 🚨 Post 데이터에 likes(좋아요 누른 사람들의 아이디 목록)를 추가했습니다.
+interface Post { id: string; content: string; author: string; createdAt: any; imageUrl?: string; language: string; likes?: string[]; }
 
-function PostCard({ post }: { post: Post }) {
+// ⭐️ 자식 컴포넌트(게시물 카드)에 로그인 팝업 띄우는 권한(onAuthRequired)을 넘겨줍니다.
+function PostCard({ post, onAuthRequired }: { post: Post; onAuthRequired: () => void }) {
   const { currentLang } = useLanguage();
+  const { user } = useAuth(); // 내 로그인 정보 가져오기
   const [translatedContent, setTranslatedContent] = useState(post.content);
   const [isTranslating, setIsTranslating] = useState(false);
+
+  // 내가 이 게시물에 좋아요를 눌렀는지 확인하는 마법의 공식
+  const isLiked = user ? post.likes?.includes(user.uid) : false;
+  const likesCount = post.likes?.length || 0;
 
   useEffect(() => {
     if (post.language === currentLang) { setTranslatedContent(post.content); return; }
@@ -28,6 +36,27 @@ function PostCard({ post }: { post: Post }) {
     };
     translate();
   }, [currentLang, post.content, post.language]);
+
+  // ⭐️ 좋아요 버튼을 눌렀을 때 작동하는 함수
+  const toggleLike = async () => {
+    if (!user) {
+      onAuthRequired(); // 비회원이면 로그인 팝업 띄우기!
+      return;
+    }
+    
+    const postRef = doc(db, "posts", post.id);
+    try {
+      if (isLiked) {
+        // 이미 눌렀다면? 내 아이디를 목록에서 빼기 (좋아요 취소)
+        await updateDoc(postRef, { likes: arrayRemove(user.uid) });
+      } else {
+        // 안 눌렀다면? 내 아이디를 목록에 추가하기 (좋아요 완료)
+        await updateDoc(postRef, { likes: arrayUnion(user.uid) });
+      }
+    } catch (error) {
+      console.error("좋아요 처리 실패:", error);
+    }
+  };
 
   return (
     <article className="bg-white p-4 shadow-sm">
@@ -49,7 +78,16 @@ function PostCard({ post }: { post: Post }) {
         </div>
       )}
       <div className="flex items-center gap-6 text-gray-500 text-sm border-t border-gray-100 pt-3 mt-1">
-        <button className="flex items-center gap-1.5 hover:text-red-500 transition"><Heart className="w-4 h-4" /> 좋아요</button>
+        
+        {/* 🚨 좋아요 버튼 영역 (누르면 색깔이 변하고 숫자가 표시됩니다!) */}
+        <button 
+          onClick={toggleLike} 
+          className={`flex items-center gap-1.5 transition ${isLiked ? 'text-red-500 font-medium' : 'hover:text-red-500'}`}
+        >
+          <Heart className={`w-4 h-4 transition-transform active:scale-125 ${isLiked ? 'fill-red-500 text-red-500' : ''}`} /> 
+          좋아요 {likesCount > 0 && <span>{likesCount}</span>}
+        </button>
+
         <button className="flex items-center gap-1.5 hover:text-blue-500 transition"><MessageCircle className="w-4 h-4" /> 댓글</button>
         <button className="flex items-center gap-1.5 hover:text-green-500 transition ml-auto"><Share2 className="w-4 h-4" /> 공유</button>
       </div>
@@ -59,7 +97,6 @@ function PostCard({ post }: { post: Post }) {
 
 export default function Home() {
   const { currentLang } = useLanguage();
-  // 🚨 닉네임(userProfile)을 통신망에서 꺼내옵니다!
   const { user, userProfile } = useAuth();
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
@@ -102,11 +139,11 @@ export default function Home() {
       }
       await addDoc(collection(db, "posts"), {
         content,
-        // 🚨 드디어! 내 진짜 닉네임이 저장됩니다.
         author: userProfile?.name || "유저",
         createdAt: serverTimestamp(),
         language: currentLang,
         imageUrl: uploadedImageUrl,
+        likes: [], // 🚨 새 글을 쓸 때는 좋아요 0개(빈 목록)로 시작!
       });
       setContent(""); removeImage();
     } catch (error) { alert("게시물 업로드 실패"); } finally { setIsSubmitting(false); }
@@ -146,7 +183,10 @@ export default function Home() {
         </div>
       </div>
       <div className="flex flex-col gap-2">
-        {posts.length === 0 ? <div className="p-10 text-center text-gray-400 text-sm bg-white">첫 번째 게시물의 주인공이 되어보세요!</div> : posts.map((post) => <PostCard key={post.id} post={post} />)}
+        {posts.length === 0 ? <div className="p-10 text-center text-gray-400 text-sm bg-white">첫 번째 게시물의 주인공이 되어보세요!</div> : 
+          // 🚨 게시물 카드에 '로그인 팝업 띄우기' 권한을 넘겨줍니다.
+          posts.map((post) => <PostCard key={post.id} post={post} onAuthRequired={() => setIsAuthModalOpen(true)} />)
+        }
       </div>
       <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
     </div>
