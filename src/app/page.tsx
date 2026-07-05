@@ -6,23 +6,29 @@ import { useLanguage } from "../context/LanguageContext";
 import { useAuth } from "../context/AuthContext";
 import AuthModal from "../components/AuthModal";
 import { db, storage } from "../firebase";
-// 🚨 좋아요 업데이트를 위해 doc, updateDoc, arrayUnion, arrayRemove 도구를 추가로 가져옵니다!
 import { collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, doc, updateDoc, arrayUnion, arrayRemove } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
-// 🚨 Post 데이터에 likes(좋아요 누른 사람들의 아이디 목록)를 추가했습니다.
-interface Post { id: string; content: string; author: string; createdAt: any; imageUrl?: string; language: string; likes?: string[]; }
+// 🚨 댓글 데이터를 저장할 수 있도록 comments 배열을 추가했습니다!
+interface Comment { id: string; author: string; authorImg: string; text: string; createdAt: number; }
+interface Post { id: string; content: string; author: string; createdAt: any; imageUrl?: string; language: string; likes?: string[]; comments?: Comment[]; }
 
-// ⭐️ 자식 컴포넌트(게시물 카드)에 로그인 팝업 띄우는 권한(onAuthRequired)을 넘겨줍니다.
 function PostCard({ post, onAuthRequired }: { post: Post; onAuthRequired: () => void }) {
   const { currentLang } = useLanguage();
-  const { user } = useAuth(); // 내 로그인 정보 가져오기
+  // 🚨 댓글을 쓸 때 내 정보를 넣기 위해 userProfile도 가져옵니다.
+  const { user, userProfile } = useAuth(); 
   const [translatedContent, setTranslatedContent] = useState(post.content);
   const [isTranslating, setIsTranslating] = useState(false);
 
-  // 내가 이 게시물에 좋아요를 눌렀는지 확인하는 마법의 공식
+  // 좋아요 상태 관리
   const isLiked = user ? post.likes?.includes(user.uid) : false;
   const likesCount = post.likes?.length || 0;
+  
+  // ⭐️ 댓글창 열고 닫기 & 입력 상태 관리
+  const [showComments, setShowComments] = useState(false);
+  const [commentText, setCommentText] = useState("");
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false);
+  const commentsCount = post.comments?.length || 0;
 
   useEffect(() => {
     if (post.language === currentLang) { setTranslatedContent(post.content); return; }
@@ -37,24 +43,41 @@ function PostCard({ post, onAuthRequired }: { post: Post; onAuthRequired: () => 
     translate();
   }, [currentLang, post.content, post.language]);
 
-  // ⭐️ 좋아요 버튼을 눌렀을 때 작동하는 함수
   const toggleLike = async () => {
-    if (!user) {
-      onAuthRequired(); // 비회원이면 로그인 팝업 띄우기!
-      return;
-    }
-    
+    if (!user) { onAuthRequired(); return; }
     const postRef = doc(db, "posts", post.id);
     try {
-      if (isLiked) {
-        // 이미 눌렀다면? 내 아이디를 목록에서 빼기 (좋아요 취소)
-        await updateDoc(postRef, { likes: arrayRemove(user.uid) });
-      } else {
-        // 안 눌렀다면? 내 아이디를 목록에 추가하기 (좋아요 완료)
-        await updateDoc(postRef, { likes: arrayUnion(user.uid) });
-      }
+      if (isLiked) await updateDoc(postRef, { likes: arrayRemove(user.uid) });
+      else await updateDoc(postRef, { likes: arrayUnion(user.uid) });
+    } catch (error) { console.error("좋아요 처리 실패:", error); }
+  };
+
+  // ⭐️ 댓글 등록 함수
+  const handleCommentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) { onAuthRequired(); return; }
+    if (!commentText.trim()) return;
+
+    setIsSubmittingComment(true);
+    try {
+      const postRef = doc(db, "posts", post.id);
+      const newComment = {
+        id: Date.now().toString(),
+        author: userProfile?.name || "유저",
+        authorImg: userProfile?.imageUrl || "",
+        text: commentText,
+        createdAt: Date.now(),
+      };
+      
+      // 파이어베이스 게시물 데이터 안에 내 댓글을 쏙 집어넣습니다!
+      await updateDoc(postRef, {
+        comments: arrayUnion(newComment)
+      });
+      setCommentText(""); // 입력창 비우기
     } catch (error) {
-      console.error("좋아요 처리 실패:", error);
+      alert("댓글 작성에 실패했습니다.");
+    } finally {
+      setIsSubmittingComment(false);
     }
   };
 
@@ -77,20 +100,64 @@ function PostCard({ post, onAuthRequired }: { post: Post; onAuthRequired: () => 
           <img src={post.imageUrl} alt="포스트 이미지" className="w-full object-cover max-h-80" />
         </div>
       )}
+      
       <div className="flex items-center gap-6 text-gray-500 text-sm border-t border-gray-100 pt-3 mt-1">
-        
-        {/* 🚨 좋아요 버튼 영역 (누르면 색깔이 변하고 숫자가 표시됩니다!) */}
-        <button 
-          onClick={toggleLike} 
-          className={`flex items-center gap-1.5 transition ${isLiked ? 'text-red-500 font-medium' : 'hover:text-red-500'}`}
-        >
+        <button onClick={toggleLike} className={`flex items-center gap-1.5 transition ${isLiked ? 'text-red-500 font-medium' : 'hover:text-red-500'}`}>
           <Heart className={`w-4 h-4 transition-transform active:scale-125 ${isLiked ? 'fill-red-500 text-red-500' : ''}`} /> 
           좋아요 {likesCount > 0 && <span>{likesCount}</span>}
         </button>
 
-        <button className="flex items-center gap-1.5 hover:text-blue-500 transition"><MessageCircle className="w-4 h-4" /> 댓글</button>
+        {/* 🚨 댓글 버튼: 누르면 showComments 스위치가 켜졌다 꺼졌다 합니다 */}
+        <button onClick={() => setShowComments(!showComments)} className={`flex items-center gap-1.5 transition ${showComments ? 'text-blue-500' : 'hover:text-blue-500'}`}>
+          <MessageCircle className={`w-4 h-4 ${showComments ? 'fill-blue-100' : ''}`} /> 
+          댓글 {commentsCount > 0 && <span>{commentsCount}</span>}
+        </button>
+        
         <button className="flex items-center gap-1.5 hover:text-green-500 transition ml-auto"><Share2 className="w-4 h-4" /> 공유</button>
       </div>
+
+      {/* ⭐️ 숨겨져 있던 댓글창 영역 */}
+      {showComments && (
+        <div className="mt-4 pt-4 border-t border-gray-100 flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
+          
+          {/* 댓글 목록 보여주기 */}
+          {post.comments && post.comments.length > 0 ? (
+            <div className="flex flex-col gap-3 mb-2">
+              {post.comments.map((c) => (
+                <div key={c.id} className="flex gap-2 items-start">
+                  <div className="w-7 h-7 rounded-full bg-gray-200 flex-shrink-0 overflow-hidden flex items-center justify-center text-[10px] font-bold text-gray-500 border border-gray-100">
+                    {c.authorImg ? <img src={c.authorImg} alt="img" className="w-full h-full object-cover" /> : c.author[0]}
+                  </div>
+                  <div className="flex flex-col bg-gray-50 rounded-2xl px-3 py-2 flex-1 border border-gray-100">
+                    <span className="text-xs font-bold text-gray-900">{c.author}</span>
+                    <span className="text-xs text-gray-700 leading-snug mt-0.5">{c.text}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-xs text-gray-400 text-center mb-2">첫 댓글을 남겨보세요!</div>
+          )}
+
+          {/* 댓글 입력창 폼 */}
+          <form onSubmit={handleCommentSubmit} className="flex gap-2 items-center">
+            <div className="w-8 h-8 rounded-full bg-blue-100 flex-shrink-0 overflow-hidden flex items-center justify-center text-blue-600 font-bold text-xs">
+              {userProfile?.imageUrl ? <img src={userProfile.imageUrl} alt="img" className="w-full h-full object-cover" /> : (userProfile?.name?.[0] || user?.email?.[0]?.toUpperCase() || "나")}
+            </div>
+            <input
+              type="text"
+              value={commentText}
+              onChange={(e) => setCommentText(e.target.value)}
+              placeholder={user ? "댓글을 입력하세요..." : "로그인 후 댓글을 남길 수 있습니다."}
+              onClick={() => { if(!user) onAuthRequired(); }}
+              className="flex-1 bg-gray-100 border border-transparent rounded-full px-4 py-2 text-sm outline-none focus:bg-white focus:border-blue-300 transition"
+            />
+            <button type="submit" disabled={isSubmittingComment || !commentText.trim()} className="text-blue-600 disabled:text-gray-300 p-1.5 transition-transform active:scale-95">
+              <Send className="w-4 h-4" />
+            </button>
+          </form>
+        </div>
+      )}
     </article>
   );
 }
@@ -143,7 +210,8 @@ export default function Home() {
         createdAt: serverTimestamp(),
         language: currentLang,
         imageUrl: uploadedImageUrl,
-        likes: [], // 🚨 새 글을 쓸 때는 좋아요 0개(빈 목록)로 시작!
+        likes: [], 
+        comments: [], // 🚨 새 글을 쓸 때는 댓글 0개로 시작!
       });
       setContent(""); removeImage();
     } catch (error) { alert("게시물 업로드 실패"); } finally { setIsSubmitting(false); }
@@ -184,7 +252,6 @@ export default function Home() {
       </div>
       <div className="flex flex-col gap-2">
         {posts.length === 0 ? <div className="p-10 text-center text-gray-400 text-sm bg-white">첫 번째 게시물의 주인공이 되어보세요!</div> : 
-          // 🚨 게시물 카드에 '로그인 팝업 띄우기' 권한을 넘겨줍니다.
           posts.map((post) => <PostCard key={post.id} post={post} onAuthRequired={() => setIsAuthModalOpen(true)} />)
         }
       </div>
