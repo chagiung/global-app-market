@@ -9,22 +9,18 @@ import { db, storage } from "../firebase";
 import { collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, doc, updateDoc, arrayUnion, arrayRemove } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
-// 🚨 댓글 데이터를 저장할 수 있도록 comments 배열을 추가했습니다!
 interface Comment { id: string; author: string; authorImg: string; text: string; createdAt: number; }
 interface Post { id: string; content: string; author: string; createdAt: any; imageUrl?: string; language: string; likes?: string[]; comments?: Comment[]; }
 
 function PostCard({ post, onAuthRequired }: { post: Post; onAuthRequired: () => void }) {
   const { currentLang } = useLanguage();
-  // 🚨 댓글을 쓸 때 내 정보를 넣기 위해 userProfile도 가져옵니다.
   const { user, userProfile } = useAuth(); 
   const [translatedContent, setTranslatedContent] = useState(post.content);
   const [isTranslating, setIsTranslating] = useState(false);
 
-  // 좋아요 상태 관리
   const isLiked = user ? post.likes?.includes(user.uid) : false;
   const likesCount = post.likes?.length || 0;
   
-  // ⭐️ 댓글창 열고 닫기 & 입력 상태 관리
   const [showComments, setShowComments] = useState(false);
   const [commentText, setCommentText] = useState("");
   const [isSubmittingComment, setIsSubmittingComment] = useState(false);
@@ -49,10 +45,9 @@ function PostCard({ post, onAuthRequired }: { post: Post; onAuthRequired: () => 
     try {
       if (isLiked) await updateDoc(postRef, { likes: arrayRemove(user.uid) });
       else await updateDoc(postRef, { likes: arrayUnion(user.uid) });
-    } catch (error) { console.error("좋아요 처리 실패:", error); }
+    } catch (error) { console.error("좋아요 실패:", error); }
   };
 
-  // ⭐️ 댓글 등록 함수
   const handleCommentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) { onAuthRequired(); return; }
@@ -61,23 +56,35 @@ function PostCard({ post, onAuthRequired }: { post: Post; onAuthRequired: () => 
     setIsSubmittingComment(true);
     try {
       const postRef = doc(db, "posts", post.id);
-      const newComment = {
-        id: Date.now().toString(),
-        author: userProfile?.name || "유저",
-        authorImg: userProfile?.imageUrl || "",
-        text: commentText,
-        createdAt: Date.now(),
-      };
-      
-      // 파이어베이스 게시물 데이터 안에 내 댓글을 쏙 집어넣습니다!
-      await updateDoc(postRef, {
-        comments: arrayUnion(newComment)
-      });
-      setCommentText(""); // 입력창 비우기
-    } catch (error) {
-      alert("댓글 작성에 실패했습니다.");
-    } finally {
-      setIsSubmittingComment(false);
+      const newComment = { id: Date.now().toString(), author: userProfile?.name || "유저", authorImg: userProfile?.imageUrl || "", text: commentText, createdAt: Date.now() };
+      await updateDoc(postRef, { comments: arrayUnion(newComment) });
+      setCommentText(""); 
+    } catch (error) { alert("댓글 작성 실패."); } finally { setIsSubmittingComment(false); }
+  };
+
+  // ⭐️ 스마트 공유하기 기능!
+  const handleShare = async () => {
+    const shareData = {
+      title: `${post.author}님의 게시물 - GlobalApp`,
+      text: post.content,
+      url: window.location.origin, // 내 웹사이트 주소
+    };
+
+    // 스마트폰이나 최신 브라우저에서 '공유 창' 띄우기
+    if (navigator.share) {
+      try {
+        await navigator.share(shareData);
+      } catch (error) {
+        console.log("공유가 취소되었거나 지원하지 않습니다.", error);
+      }
+    } else {
+      // PC 등에서 공유 창을 지원하지 않으면 클립보드에 복사해 줍니다.
+      try {
+        await navigator.clipboard.writeText(`${shareData.title}\n\n${shareData.text}\n\n구경가기: ${shareData.url}`);
+        alert("게시물 내용과 주소가 복사되었습니다! 카카오톡이나 원하는 곳에 붙여넣기 하세요. 📋");
+      } catch (error) {
+        alert("공유하기를 지원하지 않는 기기입니다.");
+      }
     }
   };
 
@@ -107,20 +114,19 @@ function PostCard({ post, onAuthRequired }: { post: Post; onAuthRequired: () => 
           좋아요 {likesCount > 0 && <span>{likesCount}</span>}
         </button>
 
-        {/* 🚨 댓글 버튼: 누르면 showComments 스위치가 켜졌다 꺼졌다 합니다 */}
         <button onClick={() => setShowComments(!showComments)} className={`flex items-center gap-1.5 transition ${showComments ? 'text-blue-500' : 'hover:text-blue-500'}`}>
           <MessageCircle className={`w-4 h-4 ${showComments ? 'fill-blue-100' : ''}`} /> 
           댓글 {commentsCount > 0 && <span>{commentsCount}</span>}
         </button>
         
-        <button className="flex items-center gap-1.5 hover:text-green-500 transition ml-auto"><Share2 className="w-4 h-4" /> 공유</button>
+        {/* 🚨 공유하기 버튼 장착 */}
+        <button onClick={handleShare} className="flex items-center gap-1.5 hover:text-green-500 transition ml-auto">
+          <Share2 className="w-4 h-4" /> 공유
+        </button>
       </div>
 
-      {/* ⭐️ 숨겨져 있던 댓글창 영역 */}
       {showComments && (
         <div className="mt-4 pt-4 border-t border-gray-100 flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
-          
-          {/* 댓글 목록 보여주기 */}
           {post.comments && post.comments.length > 0 ? (
             <div className="flex flex-col gap-3 mb-2">
               {post.comments.map((c) => (
@@ -139,22 +145,12 @@ function PostCard({ post, onAuthRequired }: { post: Post; onAuthRequired: () => 
             <div className="text-xs text-gray-400 text-center mb-2">첫 댓글을 남겨보세요!</div>
           )}
 
-          {/* 댓글 입력창 폼 */}
           <form onSubmit={handleCommentSubmit} className="flex gap-2 items-center">
             <div className="w-8 h-8 rounded-full bg-blue-100 flex-shrink-0 overflow-hidden flex items-center justify-center text-blue-600 font-bold text-xs">
               {userProfile?.imageUrl ? <img src={userProfile.imageUrl} alt="img" className="w-full h-full object-cover" /> : (userProfile?.name?.[0] || user?.email?.[0]?.toUpperCase() || "나")}
             </div>
-            <input
-              type="text"
-              value={commentText}
-              onChange={(e) => setCommentText(e.target.value)}
-              placeholder={user ? "댓글을 입력하세요..." : "로그인 후 댓글을 남길 수 있습니다."}
-              onClick={() => { if(!user) onAuthRequired(); }}
-              className="flex-1 bg-gray-100 border border-transparent rounded-full px-4 py-2 text-sm outline-none focus:bg-white focus:border-blue-300 transition"
-            />
-            <button type="submit" disabled={isSubmittingComment || !commentText.trim()} className="text-blue-600 disabled:text-gray-300 p-1.5 transition-transform active:scale-95">
-              <Send className="w-4 h-4" />
-            </button>
+            <input type="text" value={commentText} onChange={(e) => setCommentText(e.target.value)} placeholder={user ? "댓글을 입력하세요..." : "로그인 후 댓글을 남길 수 있습니다."} onClick={() => { if(!user) onAuthRequired(); }} className="flex-1 bg-gray-100 border border-transparent rounded-full px-4 py-2 text-sm outline-none focus:bg-white focus:border-blue-300 transition" />
+            <button type="submit" disabled={isSubmittingComment || !commentText.trim()} className="text-blue-600 disabled:text-gray-300 p-1.5 transition-transform active:scale-95"><Send className="w-4 h-4" /></button>
           </form>
         </div>
       )}
@@ -189,9 +185,7 @@ export default function Home() {
       const file = e.target.files[0]; setImageFile(file); setImagePreview(URL.createObjectURL(file));
     }
   };
-  const removeImage = () => {
-    setImageFile(null); setImagePreview(null); if (fileInputRef.current) fileInputRef.current.value = "";
-  };
+  const removeImage = () => { setImageFile(null); setImagePreview(null); if (fileInputRef.current) fileInputRef.current.value = ""; };
 
   const handlePostSubmit = async () => {
     if (!user) { setIsAuthModalOpen(true); return; }
@@ -205,13 +199,7 @@ export default function Home() {
         uploadedImageUrl = await getDownloadURL(storageRef);
       }
       await addDoc(collection(db, "posts"), {
-        content,
-        author: userProfile?.name || "유저",
-        createdAt: serverTimestamp(),
-        language: currentLang,
-        imageUrl: uploadedImageUrl,
-        likes: [], 
-        comments: [], // 🚨 새 글을 쓸 때는 댓글 0개로 시작!
+        content, author: userProfile?.name || "유저", createdAt: serverTimestamp(), language: currentLang, imageUrl: uploadedImageUrl, likes: [], comments: [], 
       });
       setContent(""); removeImage();
     } catch (error) { alert("게시물 업로드 실패"); } finally { setIsSubmitting(false); }
@@ -222,23 +210,12 @@ export default function Home() {
       <div className="bg-white p-4 shadow-sm">
         <div className="flex items-start gap-3 mb-3">
           <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold shrink-0 overflow-hidden border border-gray-200">
-            {userProfile?.imageUrl ? (
-              <img src={userProfile.imageUrl} alt="내 프로필" className="w-full h-full object-cover" />
-            ) : (
-              userProfile?.name?.[0] || "나"
-            )}
+            {userProfile?.imageUrl ? <img src={userProfile.imageUrl} alt="내 프로필" className="w-full h-full object-cover" /> : (userProfile?.name?.[0] || "나")}
           </div>
           <div className="flex-1 flex flex-col gap-2">
-            <textarea
-              value={content} onChange={(e) => setContent(e.target.value)} onClick={() => { if (!user) setIsAuthModalOpen(true); }}
-              placeholder={user ? `${userProfile?.name || '회원'}님, 어떤 소식을 공유하고 싶나요?` : "로그인하고 소식을 남겨보세요!"}
-              className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition resize-none min-h-[80px]"
-            />
+            <textarea value={content} onChange={(e) => setContent(e.target.value)} onClick={() => { if (!user) setIsAuthModalOpen(true); }} placeholder={user ? `${userProfile?.name || '회원'}님, 어떤 소식을 공유하고 싶나요?` : "로그인하고 소식을 남겨보세요!"} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent transition resize-none min-h-[80px]" />
             {imagePreview && (
-              <div className="relative w-24 h-24 rounded-lg overflow-hidden border border-gray-200">
-                <img src={imagePreview} alt="preview" className="w-full h-full object-cover" />
-                <button onClick={removeImage} className="absolute top-1 right-1 bg-black/50 text-white rounded-full p-1"><X className="w-3 h-3" /></button>
-              </div>
+              <div className="relative w-24 h-24 rounded-lg overflow-hidden border border-gray-200"><img src={imagePreview} alt="preview" className="w-full h-full object-cover" /><button onClick={removeImage} className="absolute top-1 right-1 bg-black/50 text-white rounded-full p-1"><X className="w-3 h-3" /></button></div>
             )}
           </div>
         </div>
@@ -251,9 +228,7 @@ export default function Home() {
         </div>
       </div>
       <div className="flex flex-col gap-2">
-        {posts.length === 0 ? <div className="p-10 text-center text-gray-400 text-sm bg-white">첫 번째 게시물의 주인공이 되어보세요!</div> : 
-          posts.map((post) => <PostCard key={post.id} post={post} onAuthRequired={() => setIsAuthModalOpen(true)} />)
-        }
+        {posts.length === 0 ? <div className="p-10 text-center text-gray-400 text-sm bg-white">첫 번째 게시물의 주인공이 되어보세요!</div> : posts.map((post) => <PostCard key={post.id} post={post} onAuthRequired={() => setIsAuthModalOpen(true)} />)}
       </div>
       <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
     </div>
